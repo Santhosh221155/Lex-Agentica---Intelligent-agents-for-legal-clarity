@@ -1,0 +1,104 @@
+---
+version: 1
+disable_existing_loggers: false
+
+formatters:
+  simple:
+    format: '%(levelname)s:%(name)s:%(message)s'
+  detailed:
+    format: '%(asctime)s | %(name)s | %(levelname)s | %(message)s'
+    datefmt: '%H:%M:%S'
+
+handlers:
+  console:
+    class: logging.StreamHandler
+    level: INFO
+    formatter: simple
+    stream: ext://sys.stdout
+
+root:
+  level: INFO
+  handlers:
+    - console
+
+loggers:
+  # YOUR APP — show info for startup timing
+  app:
+    level: INFO
+    propagate: true
+
+  agentic_rag:
+    level: INFO
+    propagate: true
+
+  # Suppress noisy third-party libraries
+  sentence_transformers:
+    level: CRITICAL
+    propagate: false
+
+  sentence_transformers.base.model:
+    level: CRITICAL
+    propagate: false
+
+  huggingface_hub:
+    level: CRITICAL
+    propagate: false
+
+  transformers:
+    level: CRITICAL
+    propagate: false
+
+  httpx:
+    level: CRITICAL
+    propagate: false
+
+  chromadb:
+    level: WARNING
+    propagate: false
+
+  # THIRD-PARTY LIBRARIES — suppress completely
+  httpx:
+    level: CRITICAL
+
+  httpx._client:
+    level: CRITICAL
+
+  httpx._models:
+    level: CRITICAL
+
+  sentence_transformers:
+    level: WARNING
+
+  sentence_transformers.base.model:
+    level: CRITICAL
+
+  huggingface_hub:
+    level: CRITICAL
+
+  huggingface_hub.utils._http:
+    level: CRITICAL
+
+  watchfiles.main:
+    level: CRITICAL
+
+  watchfiles:
+    level: CRITICAL
+
+  langchain:
+    level: WARNING
+
+  langchain_community:
+    level: WARNING
+
+  chromadb:
+    level: WARNING
+
+  sqlalchemy:
+    level: WARNING
+
+  uvicorn:
+    level: INFO
+
+  uvicorn.access:
+    level: WARNING
+

@@ -1,0 +1,46 @@
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Node modules (if frontend exists)
+node_modules/
+
+# Next.js
+frontend/.next/
+frontend/out/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
