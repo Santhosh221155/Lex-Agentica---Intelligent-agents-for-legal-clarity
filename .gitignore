@@ -24,6 +24,7 @@ Thumbs.db
 # Logs
 *.log
 logs/
+server_*.log
 
 # Build artifacts
 dist/
@@ -44,3 +45,15 @@ frontend/out/
 .pytest_cache/
 .coverage
 htmlcov/
+test*.py
+
+# Temporary files
+tmp/
+tmp*.py
+sitecustomize.py
+start_server_with_logging.py
+
+# Databases
+*.db
+chroma_db/
+alembic_fallback.db

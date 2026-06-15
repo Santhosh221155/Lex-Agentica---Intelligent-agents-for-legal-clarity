@@ -1,4 +1,5 @@
-# Agentic RAG — Legal Document Intelligence Platform (Local Prototype)
+<<<<<<< HEAD
+# Lex-Agentica — Intelligent Agents for Legal Clarity
 
 This repository is a local, production-oriented prototype of an Agentic Retrieval-Augmented-Generation (RAG) platform specialized for Legal Document Intelligence (example domain). It demonstrates an architecture where multiple autonomous agents plan, retrieve, tool, validate, and synthesize answers with observability and production practices.
 
@@ -102,3 +103,6 @@ python -m unittest discover -s tests -v
 ✅ End-user assistant mode active
 ✅ Observability and security features in place
 ✅ Local development setup complete
+=======
+# Lex-Agentica---Intelligent-agents-for-legal-clarity
+>>>>>>> 9fc81557a730fa9b854274b6657d715f7309e617
