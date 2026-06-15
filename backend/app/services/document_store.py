@@ -204,7 +204,17 @@ async def list_chunks(document_id: int, owner_id: int) -> List[Dict[str, Any]]:
     SessionLocal = get_session_factory()
     async with SessionLocal() as session:
         stmt = (
-            select(chunks)
+            select(
+                chunks.c.id,
+                chunks.c.document_id,
+                chunks.c.tenant_id,
+                chunks.c.workspace_id,
+                chunks.c.chunk_index,
+                chunks.c.page_number,
+                chunks.c.content,
+                chunks.c.metadata,
+                chunks.c.created_at
+            )
             .select_from(chunks.join(documents, chunks.c.document_id == documents.c.id))
             .where(chunks.c.document_id == document_id)
             .where(documents.c.owner_id == owner_id)
@@ -224,7 +234,15 @@ async def list_user_chunks(owner_id: int) -> List[Dict[str, Any]]:
 
         stmt = (
             select(
-                chunks,
+                chunks.c.id,
+                chunks.c.document_id,
+                chunks.c.tenant_id,
+                chunks.c.workspace_id,
+                chunks.c.chunk_index,
+                chunks.c.page_number,
+                chunks.c.content,
+                chunks.c.metadata,
+                chunks.c.created_at,
                 documents.c.owner_id.label("owner_id"),
                 documents.c.source_uri.label("document_source"),
                 documents.c.metadata.label("document_metadata"),
