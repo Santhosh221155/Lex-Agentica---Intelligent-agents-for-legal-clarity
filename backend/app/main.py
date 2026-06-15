@@ -90,6 +90,13 @@ class QueryRequest(BaseModel):
     doc_id: Optional[int] = None
 
 
+class CompareRequest(BaseModel):
+    query: str = Field(..., min_length=1, max_length=4000)
+    document_id_1: int = Field(...)
+    document_id_2: int = Field(...)
+    user_id: str = Field(default="user:local", max_length=128)
+
+
 class QueryResponse(BaseModel):
     plan: dict[str, Any]
     first_chunk: Any
@@ -897,3 +904,59 @@ async def stream_query(request: Request, q: str, doc_id: Optional[int] = None, u
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+@app.post("/api/compare")
+async def compare_endpoint(
+    payload: CompareRequest,
+    request: Request,
+    user: dict = Depends(get_current_user)
+):
+    query = sanitize_query(payload.query)
+    user_id = int(user.get("id"))
+    
+    if not query:
+        return JSONResponse({"error": "missing query"}, status_code=400)
+    
+    if detect_prompt_injection(query) or is_sensitive_request(query):
+        return JSONResponse(
+            {"error": "I'm not able to help with that. Please ask a question related to the available documents."},
+            status_code=400
+        )
+    
+    if is_suspicious_prompt(query):
+        return JSONResponse(
+            {"error": "I'm not able to help with that. Please ask a question related to the available documents."},
+            status_code=400
+        )
+    
+    # Rate limiting
+    ip = request.client.host if request.client else "anon"
+    user_key = build_rate_key("user", str(user.get("id")), 3600)
+    ip_key = build_rate_key("ip", ip, 3600)
+    if not await check_rate_limit(user_key, RATE_LIMIT_PER_HOUR, 3600):
+        return JSONResponse({"error": "rate_limit_exceeded"}, status_code=429)
+    if not await check_rate_limit(ip_key, RATE_LIMIT_PER_HOUR, 3600):
+        return JSONResponse({"error": "rate_limit_exceeded"}, status_code=429)
+    
+    try:
+        from app.agents.comparison_agent import compare_documents
+        result = await compare_documents(
+            query=query,
+            user_id=user_id,
+            document_id_1=payload.document_id_1,
+            document_id_2=payload.document_id_2
+        )
+        return result
+    except Exception as exc:
+        inc_error("comparison", exc.__class__.__name__)
+        log_event(
+            "comparison.error",
+            user_id=user_id,
+            error=exc.__class__.__name__,
+            message=str(exc)
+        )
+        return JSONResponse(
+            {"error": "comparison_failed", "detail": str(exc)},
+            status_code=400
+        )

@@ -82,15 +82,25 @@ function isSecurityEvent(item: StreamItem): boolean {
 export default function WorkspaceStudio() {
   const { status, logout, user, authFetch } = useAuth()
 
+  // Mode state
+  const [mode, setMode] = useState<'regular' | 'comparison'>('regular')
+
   // Chat state
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [queryValue, setQueryValue] = useState('')
   const [isRunning, setIsRunning] = useState(false)
   const [workspaceError, setWorkspaceError] = useState<string | null>(null)
 
-  // Document state
+  // Document state (regular mode)
   const [activeDocument, setActiveDocument] = useState<ActiveDocument | null>(null)
   const [confirmReplace, setConfirmReplace] = useState<File | null>(null)
+
+  // Document state (comparison mode)
+  const [documentA, setDocumentA] = useState<ActiveDocument | null>(null)
+  const [documentB, setDocumentB] = useState<ActiveDocument | null>(null)
+
+  // Comparison result state
+  const [comparisonResult, setComparisonResult] = useState<{ similarities: string; differences: string; summary: string } | null>(null)
 
   // Sources panel state
   const [currentSources, setCurrentSources] = useState<string[]>([])
@@ -112,13 +122,23 @@ export default function WorkspaceStudio() {
 
   /* ─── Ingestion Polling ─── */
 
-  async function pollIngest(jobId: string, fileName: string) {
+  async function pollIngest(jobId: string, fileName: string, targetDoc: 'A' | 'B' | 'regular' = 'regular') {
+    const updateDoc = (updater: (current: ActiveDocument | null) => ActiveDocument | null) => {
+      if (targetDoc === 'A') {
+        setDocumentA(updater)
+      } else if (targetDoc === 'B') {
+        setDocumentB(updater)
+      } else {
+        setActiveDocument(updater)
+      }
+    }
+
     const pollingInterval = 1500
     while (true) {
       const response = await authFetch(`${BACKEND_URL}/api/ingest/status/${jobId}`)
       if (!response.ok) {
         const detail = friendlyError('indexing')
-        setActiveDocument((current) =>
+        updateDoc((current) =>
           current && current.jobId === jobId
             ? { ...current, status: 'failed', stage: 'failed', progress: 0, detail }
             : current,
@@ -142,7 +162,7 @@ export default function WorkspaceStudio() {
 
       const progress = stageProgress(statusValue)
 
-      setActiveDocument((current) =>
+      updateDoc((current) =>
         current && current.jobId === jobId
           ? { ...current, fileName, status: nextStatus, stage: statusValue, progress, detail }
           : current,
@@ -155,34 +175,49 @@ export default function WorkspaceStudio() {
 
   /* ─── Upload ─── */
 
-  async function uploadFiles(fileList: FileList | null) {
+  async function uploadFiles(fileList: FileList | null, targetDoc: 'A' | 'B' | 'regular' = 'regular') {
     if (!fileList || fileList.length === 0) return
 
     const file = fileList[0] // Only one file at a time
 
-    // If there's an active document, ask for confirmation
-    if (activeDocument && activeDocument.status === 'completed') {
-      setConfirmReplace(file)
-      return
-    }
+    if (targetDoc === 'regular') {
+      // If there's an active document, ask for confirmation
+      if (activeDocument && activeDocument.status === 'completed') {
+        setConfirmReplace(file)
+        return
+      }
 
-    await performUpload(file)
+      await performUpload(file, 'regular')
+    } else {
+      await performUpload(file, targetDoc)
+    }
   }
 
-  async function performUpload(file: File) {
+  async function performUpload(file: File, targetDoc: 'A' | 'B' | 'regular' = 'regular') {
     setConfirmReplace(null)
     setWorkspaceError(null)
 
     const jobId = `upload-${crypto.randomUUID()}`
     uploadStatusRef.current[jobId] = 'queued'
-    setActiveDocument({
+
+    const updateDoc = (updater: (current: ActiveDocument | null) => ActiveDocument | null) => {
+      if (targetDoc === 'A') {
+        setDocumentA(updater)
+      } else if (targetDoc === 'B') {
+        setDocumentB(updater)
+      } else {
+        setActiveDocument(updater)
+      }
+    }
+
+    updateDoc(() => ({
       fileName: file.name,
       jobId,
       status: 'queued',
       stage: 'queued',
       progress: 8,
       detail: 'Uploading...',
-    })
+    }))
 
     const formData = new FormData()
     formData.append('file', file)
@@ -199,7 +234,7 @@ export default function WorkspaceStudio() {
 
       if (!response.ok) {
         const detail = friendlyError('upload')
-        setActiveDocument((current) =>
+        updateDoc((current) =>
           current && current.jobId === jobId
             ? { ...current, status: 'failed', stage: 'failed', progress: 0, detail }
             : current,
@@ -213,7 +248,7 @@ export default function WorkspaceStudio() {
 
       if (!backendJobId) {
         const detail = friendlyError('upload')
-        setActiveDocument((current) =>
+        updateDoc((current) =>
           current && current.jobId === jobId
             ? { ...current, status: 'failed', stage: 'failed', progress: 0, detail }
             : current,
@@ -222,7 +257,7 @@ export default function WorkspaceStudio() {
         return
       }
 
-      setActiveDocument((current) =>
+      updateDoc((current) =>
         current && current.jobId === jobId
           ? {
               ...current,
@@ -237,10 +272,10 @@ export default function WorkspaceStudio() {
       )
 
       uploadStatusRef.current[backendJobId] = 'processing'
-      await pollIngest(backendJobId, file.name)
+      await pollIngest(backendJobId, file.name, targetDoc)
     } catch (error: any) {
       const detail = friendlyError('upload')
-      setActiveDocument((current) =>
+      updateDoc((current) =>
         current && current.jobId === jobId
           ? { ...current, status: 'failed', stage: 'failed', progress: 0, detail }
           : current,
@@ -250,6 +285,45 @@ export default function WorkspaceStudio() {
 
     if (fileInputRef.current) {
       fileInputRef.current.value = ''
+    }
+  }
+
+  async function runComparison() {
+    const question = queryValue.trim()
+    if (!question) return
+    if (!documentA?.documentId || !documentB?.documentId) {
+      setWorkspaceError('Please upload both documents first.')
+      return
+    }
+
+    setWorkspaceError(null)
+    setIsRunning(true)
+    setComparisonResult(null)
+
+    try {
+      const response = await authFetch(`${BACKEND_URL}/api/compare`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          document_id_1: documentA.documentId,
+          document_id_2: documentB.documentId,
+          query: question,
+        }),
+      })
+
+      if (!response.ok) {
+        const text = await response.text()
+        throw new Error(text || 'Request failed')
+      }
+
+      const result = await response.json()
+      setComparisonResult(result)
+      setQueryValue('')
+    } catch (error: any) {
+      const detail = error.message || friendlyError('retrieval')
+      setWorkspaceError(detail)
+    } finally {
+      setIsRunning(false)
     }
   }
 
@@ -399,7 +473,22 @@ export default function WorkspaceStudio() {
       {/* Header */}
       <header style={header}>
         <div style={headerLeft}>
-          <span style={logo}>Agentic RAG</span>
+          <span style={logo}>Lex Agentica</span>
+          {/* Mode Toggle */}
+          <div style={modeToggle}>
+            <button
+              style={{ ...modeBtn, ...(mode === 'regular' && modeBtnActive) }}
+              onClick={() => setMode('regular')}
+            >
+              Regular Mode
+            </button>
+            <button
+              style={{ ...modeBtn, ...(mode === 'comparison' && modeBtnActive) }}
+              onClick={() => setMode('comparison')}
+            >
+              Comparison Mode
+            </button>
+          </div>
         </div>
         <div style={headerRight}>
           <ThemeToggle />
@@ -417,23 +506,81 @@ export default function WorkspaceStudio() {
           </button>
           {uploadOpen && (
             <div style={uploadContent}>
-              <div style={panelTitle}>Upload</div>
-              <button style={uploadBtn} onClick={() => fileInputRef.current?.click()}>Upload PDF</button>
+              {mode === 'regular' ? (
+                <>
+                  <div style={panelTitle}>Upload</div>
+                  <button style={uploadBtn} onClick={() => fileInputRef.current?.click()}>Upload PDF</button>
 
-              {activeDocument ? (
-                <div style={docCard}>
-                  <div style={docName}>{activeDocument.fileName}</div>
-                  <div style={docStatus}>
-                    <span style={statusDot(activeDocument.status)} />
-                    <span>{stageLabel(activeDocument.stage)}</span>
-                  </div>
-                  <div style={progressTrack}>
-                    <div style={{ ...progressFill, width: `${activeDocument.progress}%` }} />
-                  </div>
-                  {activeDocument.detail && <div style={docDetail}>{activeDocument.detail}</div>}
-                </div>
+                  {activeDocument ? (
+                    <div style={docCard}>
+                      <div style={docName}>{activeDocument.fileName}</div>
+                      <div style={docStatus}>
+                        <span style={statusDot(activeDocument.status)} />
+                        <span>{stageLabel(activeDocument.stage)}</span>
+                      </div>
+                      <div style={progressTrack}>
+                        <div style={{ ...progressFill, width: `${activeDocument.progress}%` }} />
+                      </div>
+                      {activeDocument.detail && <div style={docDetail}>{activeDocument.detail}</div>}
+                    </div>
+                  ) : (
+                    <div style={emptyDoc}>No document uploaded</div>
+                  )}
+                </>
               ) : (
-                <div style={emptyDoc}>No document uploaded</div>
+                <>
+                  <div style={panelTitle}>Upload Documents</div>
+
+                  {/* Document A */}
+                  <button style={uploadBtn} onClick={() => {
+                    const input = document.createElement('input')
+                    input.type = 'file'
+                    input.accept = 'application/pdf,.pdf'
+                    input.onchange = (e) => void uploadFiles((e.target as HTMLInputElement).files, 'A')
+                    input.click()
+                  }}>Upload Document A</button>
+
+                  {documentA ? (
+                    <div style={docCard}>
+                      <div style={docName}>A: {documentA.fileName}</div>
+                      <div style={docStatus}>
+                        <span style={statusDot(documentA.status)} />
+                        <span>{stageLabel(documentA.stage)}</span>
+                      </div>
+                      <div style={progressTrack}>
+                        <div style={{ ...progressFill, width: `${documentA.progress}%` }} />
+                      </div>
+                      {documentA.detail && <div style={docDetail}>{documentA.detail}</div>}
+                    </div>
+                  ) : (
+                    <div style={emptyDoc}>No Document A</div>
+                  )}
+
+                  {/* Document B */}
+                  <button style={uploadBtn} onClick={() => {
+                    const input = document.createElement('input')
+                    input.type = 'file'
+                    input.accept = 'application/pdf,.pdf'
+                    input.onchange = (e) => void uploadFiles((e.target as HTMLInputElement).files, 'B')
+                    input.click()
+                  }}>Upload Document B</button>
+
+                  {documentB ? (
+                    <div style={docCard}>
+                      <div style={docName}>B: {documentB.fileName}</div>
+                      <div style={docStatus}>
+                        <span style={statusDot(documentB.status)} />
+                        <span>{stageLabel(documentB.stage)}</span>
+                      </div>
+                      <div style={progressTrack}>
+                        <div style={{ ...progressFill, width: `${documentB.progress}%` }} />
+                      </div>
+                      {documentB.detail && <div style={docDetail}>{documentB.detail}</div>}
+                    </div>
+                  ) : (
+                    <div style={emptyDoc}>No Document B</div>
+                  )}
+                </>
               )}
 
               {workspaceError && <div style={errorNotice}>{workspaceError}</div>}
@@ -443,41 +590,91 @@ export default function WorkspaceStudio() {
 
         {/* Chat panel */}
         <main style={chatPanel}>
-          <div style={transcript}>
-            {messages.length === 0 && (
-              <div style={emptyChat}>Upload a document and ask a question.</div>
-            )}
-            {messages.map((message) => (
-              <div key={message.id} style={message.role === 'user' ? userBubble : assistantBubble}>
-                {message.text || (message.role === 'assistant' ? '\u00A0' : '')}
-                {message.streaming && <span style={cursor}>|</span>}
+          {mode === 'regular' ? (
+            <>
+              <div style={transcript}>
+                {messages.length === 0 && (
+                  <div style={emptyChat}>Upload a document and ask a question.</div>
+                )}
+                {messages.map((message) => (
+                  <div key={message.id} style={message.role === 'user' ? userBubble : assistantBubble}>
+                    {message.text || (message.role === 'assistant' ? '\u00A0' : '')}
+                    {message.streaming && <span style={cursor}>|</span>}
+                  </div>
+                ))}
+                <div ref={transcriptEndRef} />
               </div>
-            ))}
-            <div ref={transcriptEndRef} />
-          </div>
 
-          <div style={inputBar}>
-            <input
-              style={chatInput}
-              value={queryValue}
-              onChange={(e) => setQueryValue(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault()
-                  void runQuery(queryValue)
-                }
-              }}
-              placeholder="Ask a question..."
-              disabled={isRunning}
-            />
-            <button
-              style={sendBtn}
-              onClick={() => void runQuery(queryValue)}
-              disabled={isRunning || !queryValue.trim()}
-            >
-              <SendIcon />
-            </button>
-          </div>
+              <div style={inputBar}>
+                <input
+                  style={chatInput}
+                  value={queryValue}
+                  onChange={(e) => setQueryValue(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault()
+                      void runQuery(queryValue)
+                    }
+                  }}
+                  placeholder="Ask a question..."
+                  disabled={isRunning}
+                />
+                <button
+                  style={sendBtn}
+                  onClick={() => void runQuery(queryValue)}
+                  disabled={isRunning || !queryValue.trim()}
+                >
+                  <SendIcon />
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div style={transcript}>
+                {comparisonResult ? (
+                  <div style={comparisonContainer}>
+                    <div style={comparisonCard}>
+                      <h3 style={comparisonCardTitle}>Similarities</h3>
+                      <p>{comparisonResult.similarities}</p>
+                    </div>
+                    <div style={comparisonCard}>
+                      <h3 style={comparisonCardTitle}>Differences</h3>
+                      <p>{comparisonResult.differences}</p>
+                    </div>
+                    <div style={comparisonCard}>
+                      <h3 style={comparisonCardTitle}>Summary</h3>
+                      <p>{comparisonResult.summary}</p>
+                    </div>
+                  </div>
+                ) : (
+                  <div style={emptyChat}>Upload both documents and ask a comparison question.</div>
+                )}
+              </div>
+
+              <div style={inputBar}>
+                <input
+                  style={chatInput}
+                  value={queryValue}
+                  onChange={(e) => setQueryValue(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault()
+                      void runComparison()
+                    }
+                  }}
+                  placeholder="Ask a comparison question..."
+                  disabled={isRunning}
+                />
+                <button
+                  style={sendBtn}
+                  onClick={() => void runComparison()}
+                  disabled={isRunning || !queryValue.trim()}
+                >
+                  <SendIcon />
+                </button>
+              </div>
+            </>
+          )}
         </main>
 
         {/* Sources sidebar */}
@@ -535,7 +732,7 @@ export default function WorkspaceStudio() {
             </div>
             <div style={modalActions}>
               <button style={modalCancel} onClick={() => setConfirmReplace(null)}>Cancel</button>
-              <button style={modalConfirm} onClick={() => void performUpload(confirmReplace)}>Replace</button>
+              <button style={modalConfirm} onClick={() => void performUpload(confirmReplace, 'regular')}>Replace</button>
             </div>
           </div>
         </div>
@@ -990,4 +1187,54 @@ const modalConfirm: React.CSSProperties = {
   cursor: 'pointer',
   fontSize: 13,
   fontWeight: 600,
+}
+
+/* Mode Toggle */
+
+const modeToggle: React.CSSProperties = {
+  display: 'flex',
+  gap: 8,
+  marginLeft: 24,
+}
+
+const modeBtn: React.CSSProperties = {
+  padding: '8px 16px',
+  borderRadius: 8,
+  border: '1px solid var(--border)',
+  background: 'transparent',
+  color: 'var(--text-secondary)',
+  fontSize: 13,
+  cursor: 'pointer',
+  fontWeight: 500,
+  transition: 'all 150ms ease',
+}
+
+const modeBtnActive: React.CSSProperties = {
+  background: 'var(--primary)',
+  color: '#fff',
+  borderColor: 'var(--primary)',
+}
+
+/* Comparison UI */
+
+const comparisonContainer: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 16,
+  padding: 8,
+}
+
+const comparisonCard: React.CSSProperties = {
+  padding: 20,
+  borderRadius: 12,
+  border: '1px solid var(--border)',
+  background: 'var(--bg-soft)',
+}
+
+const comparisonCardTitle: React.CSSProperties = {
+  fontSize: 15,
+  fontWeight: 700,
+  color: 'var(--text-primary)',
+  marginBottom: 12,
+  marginTop: 0,
 }
