@@ -85,7 +85,7 @@ Return a JSON object with exactly three keys: similarities, differences, summary
 
     # 7. Call LLM
     try:
-        llm_response = await call_planning_model(user_prompt, system_prompt=SYSTEM_PROMPT)
+        llm_response = await call_planning_model(user_prompt, system_prompt=SYSTEM_PROMPT, timeout=30.0, max_tokens=1000)
     except Exception as e:
         log_event("comparison.llm_error", user_id=user_id, error=str(e))
         raise RuntimeError("Failed to generate comparison.") from e

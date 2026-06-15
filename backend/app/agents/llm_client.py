@@ -4,7 +4,7 @@ import asyncio
 from typing import Optional
 
 
-async def call_planning_model(prompt: str, model: str = None, timeout: float = 0.9) -> Optional[str]:
+async def call_planning_model(prompt: str, system_prompt: str = None, model: str = None, timeout: float = 0.9, max_tokens: int = 300) -> Optional[str]:
     """Call a Groq-compatible chat completion endpoint to get a planner response.
     Uses a short timeout to keep planning latency under ~1s. Returns None on failure.
     """
@@ -17,13 +17,14 @@ async def call_planning_model(prompt: str, model: str = None, timeout: float = 0
     if groq_api_key:
         headers["Authorization"] = f"Bearer {groq_api_key}"
 
+    system_msg = system_prompt or "You are a fast deterministic planner. Output JSON only."
     payload = {
         "model": model,
         "messages": [
-            {"role": "system", "content": "You are a fast deterministic planner. Output JSON only."},
+            {"role": "system", "content": system_msg},
             {"role": "user", "content": prompt},
         ],
-        "max_tokens": 300,
+        "max_tokens": max_tokens,
         "temperature": 0.0,
     }
 
