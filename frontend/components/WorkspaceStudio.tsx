@@ -120,6 +120,15 @@ export default function WorkspaceStudio() {
     transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
   }, [messages, isRunning])
 
+  // Clear messages when switching modes
+  useEffect(() => {
+    setMessages([])
+    setComparisonResult(null)
+    setCurrentSources([])
+    setPipelineSteps([])
+    setSecurityAlert(false)
+  }, [mode])
+
   /* ─── Ingestion Polling ─── */
 
   async function pollIngest(jobId: string, fileName: string, targetDoc: 'A' | 'B' | 'regular' = 'regular') {
@@ -196,6 +205,14 @@ export default function WorkspaceStudio() {
   async function performUpload(file: File, targetDoc: 'A' | 'B' | 'regular' = 'regular') {
     setConfirmReplace(null)
     setWorkspaceError(null)
+    // Clear messages when uploading new document in regular mode
+    if (targetDoc === 'regular') {
+      setMessages([])
+      setComparisonResult(null)
+      setCurrentSources([])
+      setPipelineSteps([])
+      setSecurityAlert(false)
+    }
 
     const jobId = `upload-${crypto.randomUUID()}`
     uploadStatusRef.current[jobId] = 'queued'
@@ -300,6 +317,16 @@ export default function WorkspaceStudio() {
     setIsRunning(true)
     setComparisonResult(null)
 
+    // Add user message
+    const userMessage: ChatMessage = {
+      id: `user-${crypto.randomUUID()}`,
+      role: 'user',
+      text: question,
+    }
+    const assistantId = `assistant-${crypto.randomUUID()}`
+    setMessages((current) => [...current, userMessage, { id: assistantId, role: 'assistant', text: '', streaming: true }])
+    setQueryValue('')
+
     try {
       const response = await authFetch(`${BACKEND_URL}/api/compare`, {
         method: 'POST',
@@ -317,10 +344,25 @@ export default function WorkspaceStudio() {
       }
 
       const result = await response.json()
-      setComparisonResult(result)
-      setQueryValue('')
+      // Build assistant text from comparison result
+      const assistantText = `### Similarities\n${result.similarities}\n\n### Differences\n${result.differences}\n\n### Summary\n${result.summary}`
+      
+      setMessages((current) =>
+        current.map((message) =>
+          message.id === assistantId
+            ? { ...message, text: assistantText, streaming: false }
+            : message,
+        ),
+      )
     } catch (error: any) {
       const detail = error.message || friendlyError('retrieval')
+      setMessages((current) =>
+        current.map((message) =>
+          message.id === assistantId
+            ? { ...message, text: detail, streaming: false }
+            : message,
+        ),
+      )
       setWorkspaceError(detail)
     } finally {
       setIsRunning(false)
@@ -631,24 +673,16 @@ export default function WorkspaceStudio() {
           ) : (
             <>
               <div style={transcript}>
-                {comparisonResult ? (
-                  <div style={comparisonContainer}>
-                    <div style={comparisonCard}>
-                      <h3 style={comparisonCardTitle}>Similarities</h3>
-                      <p>{comparisonResult.similarities}</p>
-                    </div>
-                    <div style={comparisonCard}>
-                      <h3 style={comparisonCardTitle}>Differences</h3>
-                      <p>{comparisonResult.differences}</p>
-                    </div>
-                    <div style={comparisonCard}>
-                      <h3 style={comparisonCardTitle}>Summary</h3>
-                      <p>{comparisonResult.summary}</p>
-                    </div>
-                  </div>
-                ) : (
+                {messages.length === 0 && (
                   <div style={emptyChat}>Upload both documents and ask a comparison question.</div>
                 )}
+                {messages.map((message) => (
+                  <div key={message.id} style={message.role === 'user' ? userBubble : assistantBubble}>
+                    {message.text || (message.role === 'assistant' ? '\u00A0' : '')}
+                    {message.streaming && <span style={cursor}>|</span>}
+                  </div>
+                ))}
+                <div ref={transcriptEndRef} />
               </div>
 
               <div style={inputBar}>
